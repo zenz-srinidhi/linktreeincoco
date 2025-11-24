@@ -1,0 +1,127 @@
+coco LinkTree
+
+state logic:
+    usernames Map[String]Identifier
+    clicks    Map[String]U64
+
+state actor:
+    profile Profile
+    links   []Link
+
+class Profile:
+    field name     String
+    field bio      String
+    field avatar   String
+    field username String
+
+class Link:
+    field title String
+    field url   String
+
+endpoint deploy Init():
+    pass
+
+endpoint enlist InitUser():
+    mutate profile <- LinkTree.Sender.profile:
+        profile.name     = ""
+        profile.bio      = ""
+        profile.avatar   = ""
+        profile.username = ""
+
+    mutate links <- LinkTree.Sender.links:
+        disperse links <- make([]Link, 0)
+
+endpoint dynamic SetProfile(name String, bio String, avatar String, username String):
+    if username != "":
+        mutate users <- LinkTree.Logic.usernames:
+            if !users[username]?:
+                users[username] = Sender
+            else:
+                if users[username] != Sender:
+                    throw "username_taken"
+
+    mutate profile <- LinkTree.Sender.profile:
+        profile.name   = name
+        profile.bio    = bio
+        profile.avatar = avatar
+        if username != "":
+            profile.username = username
+
+endpoint GetMyProfile() -> (profile Profile):
+    memory p Profile
+    observe stored <- LinkTree.Sender.profile:
+        gather p <- stored
+    profile = p
+
+endpoint dynamic AddLink(title String, url String):
+    mutate links <- LinkTree.Sender.links:
+        disperse append(links, Link{title: title, url: url})
+
+endpoint dynamic DeleteLink(index U64):
+    observe stored <- LinkTree.Sender.links:
+        memory count = len(stored)
+        if index >= count:
+            throw "index_out_of_range"
+
+    memory newArr = make([]Link, 0)
+    observe stored2 <- LinkTree.Sender.links:
+        for i in range(len(stored2)):
+            if i != index:
+                append(newArr, stored2[i])
+
+    mutate links <- LinkTree.Sender.links:
+        disperse links <- newArr
+
+endpoint GetMyLinks() -> (links []Link):
+    memory out = make([]Link, 0)
+    observe stored <- LinkTree.Sender.links:
+        gather out <- stored
+    links = out
+
+function FindOwner(username String) -> (owner Identifier):
+    observe m <- LinkTree.Logic.usernames:
+        if m[username]?:
+            owner = m[username]
+        else:
+            owner = Identifier(0x0)
+
+endpoint GetPublicProfile(username String) -> (profile Profile):
+    memory owner = (owner) <- FindOwner(username: username)
+    if owner == Identifier(0x0):
+        throw "not_found"
+
+    memory p Profile
+    observe stored <- LinkTree.Actor(owner).profile:
+        gather p <- stored
+
+    profile = p
+
+endpoint GetPublicLinks(username String) -> (links []Link):
+    memory owner = (owner) <- FindOwner(username: username)
+    if owner == Identifier(0x0):
+        throw "not_found"
+
+    memory out = make([]Link, 0)
+    observe stored <- LinkTree.Actor(owner).links:
+        gather out <- stored
+
+    links = out
+
+function KeyFor(username String, index U64) -> (k String):
+    k = f"{username}:{index}"
+
+endpoint dynamic RecordClick(username String, index U64):
+    memory key = (k) <- KeyFor(username: username, index: index)
+    mutate m <- LinkTree.Logic.clicks:
+        if m[key]?:
+            m[key] = m[key] + 1
+        else:
+            m[key] = 1
+
+endpoint GetClickCount(username String, index U64) -> (count U64):
+    memory key = (k) <- KeyFor(username: username, index: index)
+    observe m <- LinkTree.Logic.clicks:
+        if m[key]?:
+            count = m[key]
+        else:
+            count = 0
